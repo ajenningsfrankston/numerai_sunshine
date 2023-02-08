@@ -1,4 +1,4 @@
-from lightgbm import LGBMRegressor
+from sklearn.linear_model import Ridge
 import gc
 import json
 from pathlib import Path
@@ -18,6 +18,8 @@ from utils import (
     EXAMPLE_PREDS_COL,
 )
 
+correlation_threshold = 0.005
+
 # download all the things
 
 napi = NumerAPI()
@@ -28,7 +30,7 @@ current_round = napi.get_current_round()
 # and validation data only change periodically, so no need to download them every time.
 print("Downloading dataset files...")
 dataset_name = "v4.1"
-feature_set_name = "medium"
+feature_set_name = "correlation_threshold"
 
 Path(f"./{dataset_name}").mkdir(parents=False, exist_ok=True)
 
@@ -58,11 +60,15 @@ print("Reading minimal training data")
 with open(f"{dataset_name}/features.json", "r") as f:
     feature_metadata = json.load(f)
 
-# features = list(feature_metadata["feature_stats"].keys()) # get all the features
-# features = feature_metadata["feature_sets"]["small"] # get the small feature set
-features = feature_metadata["feature_sets"][
-    feature_set_name
-]  # get the medium feature set
+# include features above a correlation threshold
+
+df = pd.DataFrame(feature_metadata["feature_stats"])
+df = df.T
+df['spearman_corr_w_target_nomi_20_mean'] = df['spearman_corr_w_target_nomi_20_mean'].abs()
+dfs = df[(df['spearman_corr_w_target_nomi_20_mean'] > correlation_threshold)]
+features = list(dfs.index)
+
+
 target_cols = feature_metadata["targets"]
 # read in just those features along with era and target columns
 read_columns = features + target_cols + [ERA_COL, DATA_TYPE_COL]
@@ -85,7 +91,8 @@ live_data = pd.read_parquet(f"{dataset_name}/live_int8_{current_round}.parquet",
 
 
 # get all the data to possibly use for training
-all_data = pd.concat([training_data, validation_data])
+# all_data = pd.concat([training_data, validation_data]) - we don't do this
+all_data = training_data
 
 # save indices for easier data selection later
 training_index = training_data.index
@@ -108,25 +115,12 @@ live_data[features] = live_data[features].astype("int8")  # make sure change to 
 # Alternatively could convert nan columns to be floats and replace pd.NA with np.nan
 
 
-# small fast params
-params_name = "sm_lgbm"
-params = {"n_estimators": 2000,
-          "learning_rate": 0.01,
-          "max_depth": 5,
-          "num_leaves": 2 ** 5,
-          "colsample_bytree": 0.1}
-
 # recommended params
-# params_name = "lg_lgbm"
-# params = {
-#     "n_estimators": 20000,
-#     "learning_rate": 0.001,
-#     "max_depth": 6,
-#     "num_leaves": 2**6,
-#     "colsample_bytree": 0.1,
-# }
+params_name = "ridge"
 
-# loop through all of our favorite targets and build models on each of them - one over training data, one over all available data
+
+# loop through all of our favorite targets and build models on each of them -
+# one over training data, one over all available data
 # for the train_data models, we'll then predict on validation data
 # for the all_data models, we'll predict on live
 targets = [
@@ -145,15 +139,15 @@ for target in tqdm(targets):
     train_model = load_model(train_data_model_name)
     if not train_model:
         print(f"model not found, creating new one")
-        train_model = LGBMRegressor(**params)
-        # train on all of train and save the model so we don't have to train next time
+        train_model = Ridge(alpha=0.9)
+        # train on all training data and save the model so we don't have to train next time
         target_train_index = (
             all_data.loc[training_index, target].dropna().index
         )  # make sure we only train on rows which have this target
         train_model.fit(
             all_data.loc[target_train_index, features],
             all_data.loc[target_train_index, target],
-        )  # in case some of the targets are missing data
+        )  # in case targets are missing data
         print(f"saving new model: {train_data_model_name}")
         save_model(train_model, train_data_model_name)
 
@@ -169,11 +163,11 @@ for target in tqdm(targets):
     all_data_model = load_model(all_data_model_name)
     if not all_data_model:
         print(f"model not found, creating new one")
-        all_data_model = LGBMRegressor(**params)
+        all_data_model = Ridge(alpha=0.9)
         all_data_target_index = (
             all_data.loc[all_index, target].dropna().index
         )  # make sure we only train on rows which have this target
-        # train on all of train and save the model so we don't have to train next time
+        # train and save the model so we don't have to train next time
         all_data_model.fit(
             all_data.loc[all_data_target_index, features],
             all_data.loc[all_data_target_index, target],
