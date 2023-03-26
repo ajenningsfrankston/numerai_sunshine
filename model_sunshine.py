@@ -26,7 +26,7 @@ napi = NumerAPI()
 
 current_round = napi.get_current_round()
 
-# Tournament data changes every week so we specify the round in their name. Training
+# Tournament data changes every week, so we specify the round in their name. Training
 # and validation data only change periodically, so no need to download them every time.
 print("Downloading dataset files...")
 dataset_name = "v4.1"
@@ -140,7 +140,7 @@ for target in tqdm(targets):
     if not train_model:
         print(f"model not found, creating new one")
         train_model = Ridge(alpha=0.9)
-        # train on all training data and save the model so we don't have to train next time
+        # train on all training data and save the model, so we don't have to train next time
         target_train_index = (
             all_data.loc[training_index, target].dropna().index
         )  # make sure we only train on rows which have this target
